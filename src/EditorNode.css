@@ -1,0 +1,39 @@
+.editor-node {
+    width: 240px;
+    height: 180px;
+    box-sizing: border-box;
+    position: relative;
+    border: 1px solid #444;
+    border-radius: 8px;
+    background: #1e1e1e;
+}
+
+.editor-node__editor {
+    width: 100%;
+    height: calc(100% - 36px);
+    overflow: hidden;
+    border-radius: 0 0 7px 7px;
+}
+
+.editor-node__header {
+    height: 36px;
+    padding: 8px 12px;
+    background: white;
+    border-radius: 7px 7px 0 0;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* Monaco mounts only autocomplete, hover, and parameter hints here. */
+.editor-node .editor-node__widgets {
+    position: absolute !important;
+    top: 37px !important;
+    left: 1px !important;
+    overflow: visible !important;
+    background: transparent !important;
+    pointer-events: none;
+}
+
+.editor-node .editor-node__widgets > * {
+    pointer-events: auto;
+}

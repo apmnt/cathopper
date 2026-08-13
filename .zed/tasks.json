@@ -1,0 +1,8 @@
+[
+  {
+    "label": "Tauri Dev (Arch)",
+    "command": "npm",
+    "args": ["run", "tauri:dev:arch"],
+    "cwd": "$ZED_WORKTREE_ROOT"
+  }
+]
