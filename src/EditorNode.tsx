@@ -1,7 +1,8 @@
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback } from "react";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import Editor from "@monaco-editor/react";
-import "./EditorNode.css";
+import { NodeFrame } from "./NodeFrame";
+import type { editor } from "monaco-editor";
 
 export type EditorNodeData = {
   code: string;
@@ -10,64 +11,51 @@ export type EditorNodeData = {
 
 type EditorNodeType = Node<EditorNodeData>;
 
+const editorOptions: editor.IStandaloneEditorConstructionOptions = {
+  minimap: { enabled: false },
+  fontSize: 12,
+  lineNumbers: "off" as const,
+  padding: { top: 8 },
+  scrollBeyondLastLine: false,
+  renderLineHighlight: "line" as const,
+  renderLineHighlightOnlyWhenFocus: true,
+};
+
 const EditorNode = memo(
-  ({ data, isConnectable }: NodeProps<EditorNodeType>) => {
-    const [overflowWidgetsDomNode, setOverflowWidgetsDomNode] =
-      useState<HTMLDivElement | null>(null);
+  ({ data, selected }: NodeProps<EditorNodeType>) => {
     const onEditorChange = useCallback(
       (value: string | undefined) => data.onCodeChange(value ?? ""),
       [data.onCodeChange],
     );
-    const editorOptions = useMemo(
-      () => ({
-        overflowWidgetsDomNode: overflowWidgetsDomNode ?? undefined,
-        fixedOverflowWidgets: false,
-        minimap: { enabled: false },
-        fontSize: 12,
-        lineNumbers: "off" as const,
-        padding: { top: 8 },
-        scrollBeyondLastLine: false,
-        renderLineHighlight: "line" as const,
-        renderLineHighlightOnlyWhenFocus: true,
-      }),
-      [overflowWidgetsDomNode],
-    );
-
     return (
-      <div className="editor-node">
+      <NodeFrame
+        title="Code"
+        selected={selected}
+        minWidth={240}
+        minHeight={180}
+      >
         <Handle
           type="target"
           position={Position.Left}
-          isConnectable={isConnectable}
         />
 
-        <div className="editor-node__header">Code</div>
-
-        <div className="nodrag nowheel editor-node__editor">
-          {overflowWidgetsDomNode && (
-            <Editor
-              width="100%"
-              height="100%"
-              defaultLanguage="typescript"
-              theme="vs-light"
-              value={data.code}
-              onChange={onEditorChange}
-              options={editorOptions}
-            />
-          )}
+        <div className="nodrag nowheel node__editor">
+          <Editor
+            width="100%"
+            height="100%"
+            defaultLanguage="python"
+            theme="vs-light"
+            value={data.code}
+            onChange={onEditorChange}
+            options={editorOptions}
+          />
         </div>
-
-        <div
-          ref={setOverflowWidgetsDomNode}
-          className="monaco-editor vs nodrag nowheel editor-node__widgets"
-        />
 
         <Handle
           type="source"
           position={Position.Right}
-          isConnectable={isConnectable}
         />
-      </div>
+      </NodeFrame>
     );
   },
 );

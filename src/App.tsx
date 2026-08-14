@@ -1,40 +1,86 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
-import Nodes from "./Nodes";
+import Workspace from "./Workspace";
+import type { FlowGraph, InputFlowNode, PythonFlowNode } from "./flow";
+
+type FlowRunResult = {
+  run: {
+    status: "success" | "error";
+    values: Record<string, unknown>;
+    error?: string;
+  };
+};
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+  const [isRunning, setIsRunning] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [flow, setFlow] = useState<FlowGraph | null>(null);
+  const [input, setInput] = useState("");
+  const [code, setCode] = useState("");
+  const [output, setOutput] = useState<unknown>(undefined);
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke<string>("greet", { name }));
+  useEffect(() => {
+    void invoke<FlowGraph>("get_flow")
+      .then((graph) => {
+        setFlow(graph);
+        const inputNode = graph.nodes.find(
+          (node): node is InputFlowNode => node.type === "inputNode",
+        );
+        const pythonNode = graph.nodes.find(
+          (node): node is PythonFlowNode => node.type === "pythonNode",
+        );
+        setInput(inputNode?.data.value ?? "");
+        setCode(pythonNode?.data.code ?? "");
+      })
+      .catch((error) => setRunError(String(error)));
+  }, []);
+
+  async function runFlow() {
+    setIsRunning(true);
+    setRunError(null);
+    setOutput(undefined);
+    try {
+      const result = await invoke<FlowRunResult>("run_flow", {
+        input: JSON.parse(input),
+        code,
+      });
+      if (result.run.status === "error") {
+        setRunError(result.run.error ?? "Flow failed.");
+      } else {
+        setOutput(result.run.values.output);
+      }
+    } catch (error) {
+      setRunError(
+        error instanceof SyntaxError
+          ? "Input must be valid JSON."
+          : String(error),
+      );
+    } finally {
+      setIsRunning(false);
+    }
   }
 
   return (
     <main className="container">
       <div className="floating-panel">
         <h1>cathopper</h1>
-
-        <form
-          className="row"
-          onSubmit={(e) => {
-            e.preventDefault();
-            greet();
-          }}
-        >
-          <input
-            id="greet-input"
-            onChange={(e) => setName(e.currentTarget.value)}
-            placeholder="Enter a name..."
-          />
-          <button type="submit">Greet</button>
-        </form>
-        <p>{greetMsg}</p>
+        <button type="button" onClick={runFlow} disabled={isRunning || !flow}>
+          {isRunning ? "Running…" : "Run flow"}
+        </button>
+        {runError && <p>{runError}</p>}
       </div>
 
-      <Nodes />
+      {flow && (
+        <Workspace
+          graph={flow}
+          input={input}
+          onInputChange={setInput}
+          code={code}
+          onCodeChange={setCode}
+          output={output}
+        />
+      )}
     </main>
   );
 }
