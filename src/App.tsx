@@ -2,60 +2,44 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 import Workspace from "./Workspace";
-import type { FlowGraph, InputFlowNode, PythonFlowNode } from "./flow";
+import type { FlowGraph } from "./flow";
 
 type FlowRunResult = {
-  run: {
-    status: "success" | "error";
-    values: Record<string, unknown>;
-    error?: string;
-  };
+  status: "success" | "error";
+  values: Record<string, unknown>;
+  error?: string;
 };
 
 function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const [flow, setFlow] = useState<FlowGraph | null>(null);
-  const [input, setInput] = useState("");
-  const [code, setCode] = useState("");
-  const [output, setOutput] = useState<unknown>(undefined);
+  const [values, setValues] = useState<Record<string, unknown>>({});
 
   useEffect(() => {
     void invoke<FlowGraph>("get_flow")
       .then((graph) => {
         setFlow(graph);
-        const inputNode = graph.nodes.find(
-          (node): node is InputFlowNode => node.type === "inputNode",
-        );
-        const pythonNode = graph.nodes.find(
-          (node): node is PythonFlowNode => node.type === "pythonNode",
-        );
-        setInput(inputNode?.data.value ?? "");
-        setCode(pythonNode?.data.code ?? "");
       })
       .catch((error) => setRunError(String(error)));
   }, []);
 
   async function runFlow() {
+    if (!flow) return;
     setIsRunning(true);
     setRunError(null);
-    setOutput(undefined);
+    setValues({});
     try {
       const result = await invoke<FlowRunResult>("run_flow", {
-        input: JSON.parse(input),
-        code,
+        flow,
       });
-      if (result.run.status === "error") {
-        setRunError(result.run.error ?? "Flow failed.");
+      if (result.status === "error") {
+        setRunError(result.error ?? "Flow failed.");
       } else {
-        setOutput(result.run.values.output);
+        setValues(result.values);
       }
     } catch (error) {
-      setRunError(
-        error instanceof SyntaxError
-          ? "Input must be valid JSON."
-          : String(error),
-      );
+      setRunError(String(error));
     } finally {
       setIsRunning(false);
     }
@@ -74,11 +58,8 @@ function App() {
       {flow && (
         <Workspace
           graph={flow}
-          input={input}
-          onInputChange={setInput}
-          code={code}
-          onCodeChange={setCode}
-          output={output}
+          onGraphChange={setFlow}
+          values={values}
         />
       )}
     </main>

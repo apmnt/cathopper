@@ -165,10 +165,6 @@ impl Default for FlowStore {
     }
 }
 
-fn idle_run_state() -> FlowRunState {
-    run_state(FlowRunStatus::Idle, BTreeMap::new(), None)
-}
-
 fn run_state(
     status: FlowRunStatus,
     values: BTreeMap<String, Value>,
@@ -186,12 +182,15 @@ fn run_state(
     }
 }
 
-fn flow_store_state(store: &tauri::State<FlowStore>) -> Result<FlowState, String> {
+fn flow_store_graph(store: &tauri::State<FlowStore>) -> Result<FlowGraph, String> {
     store
         .0
         .lock()
         .map_err(|_| "Flow state is unavailable".to_string())
-        .map(|state| state.clone())
+        .map(|state| FlowGraph {
+            nodes: state.nodes.clone(),
+            edges: state.edges.clone(),
+        })
 }
 
 fn uv_command_failure(action: &str, output: Output) -> Result<(), String> {
@@ -298,7 +297,6 @@ fn parse_runner_response(stdout: &[u8]) -> Result<RunnerResponse, String> {
 }
 
 /// Runs a single-input, single-output Python node in its project's uv environment.
-#[tauri::command]
 fn run_python(
     project_dir: Option<String>,
     code: String,
@@ -376,20 +374,8 @@ fn run_python(
 }
 
 #[tauri::command]
-fn get_flow(store: tauri::State<FlowStore>) -> Result<FlowState, String> {
-    flow_store_state(&store)
-}
-
-#[tauri::command]
-fn replace_flow(flow: FlowGraph, store: tauri::State<FlowStore>) -> Result<FlowState, String> {
-    let mut state = store
-        .0
-        .lock()
-        .map_err(|_| "Flow state is unavailable".to_string())?;
-    state.nodes = flow.nodes;
-    state.edges = flow.edges;
-    state.run = idle_run_state();
-    Ok(state.clone())
+fn get_flow(store: tauri::State<FlowStore>) -> Result<FlowGraph, String> {
+    flow_store_graph(&store)
 }
 
 fn input_value(node: &FlowNode) -> Result<Value, String> {
@@ -482,27 +468,16 @@ fn index_edge(
 fn evaluate_node<F>(
     node: &FlowNode,
     previous_value: Option<Value>,
-    input_override: Option<&Value>,
-    code_override: Option<&str>,
     execute_python: &mut F,
 ) -> Result<Value, String>
 where
     F: FnMut(String, Value) -> Result<Value, String>,
 {
     match node.kind {
-        FlowNodeKind::InputNode => input_override
-            .cloned()
-            .map(Ok)
-            .unwrap_or_else(|| input_value(node)),
+        FlowNodeKind::InputNode => input_value(node),
         FlowNodeKind::PythonNode => previous_value
             .ok_or_else(|| "Python node needs an earlier Input node.".to_string())
-            .and_then(|input| {
-                code_override
-                    .map(str::to_owned)
-                    .map(Ok)
-                    .unwrap_or_else(|| python_source(node))
-                    .and_then(|source| execute_python(source, input))
-            }),
+            .and_then(|input| python_source(node).and_then(|source| execute_python(source, input))),
         FlowNodeKind::OutputNode => {
             previous_value.ok_or_else(|| "This node needs an earlier Input node.".to_string())
         }
@@ -575,8 +550,6 @@ fn execution_plan(
 fn evaluate_flow<F>(
     nodes: Vec<FlowNode>,
     edges: Vec<FlowEdge>,
-    input_override: Option<&Value>,
-    code_override: Option<&str>,
     mut execute_python: F,
 ) -> Result<BTreeMap<String, Value>, FlowFailure>
 where
@@ -595,8 +568,6 @@ where
             let value = evaluate_node(
                 nodes_by_id.get(&step.node_id).expect("planned node exists"),
                 previous_value,
-                input_override,
-                code_override,
                 &mut execute_python,
             )
             .map_err(|error| FlowFailure {
@@ -611,27 +582,22 @@ where
 }
 
 #[tauri::command]
-fn run_flow(
-    store: tauri::State<FlowStore>,
-    input: Option<Value>,
-    code: Option<String>,
-) -> Result<FlowState, String> {
+fn run_flow(store: tauri::State<FlowStore>, flow: FlowGraph) -> Result<FlowRunState, String> {
+    let FlowGraph { nodes, edges } = flow;
     let (nodes, edges) = {
         let mut state = store
             .0
             .lock()
             .map_err(|_| "Flow state is unavailable".to_string())?;
+        state.nodes = nodes;
+        state.edges = edges;
         state.run = run_state(FlowRunStatus::Running, BTreeMap::new(), None);
         (state.nodes.clone(), state.edges.clone())
     };
 
-    let run = evaluate_flow(
-        nodes,
-        edges,
-        input.as_ref(),
-        code.as_deref(),
-        |source, input| run_python(None, source, input).map(|result| result.output),
-    );
+    let run = evaluate_flow(nodes, edges, |source, input| {
+        run_python(None, source, input).map(|result| result.output)
+    });
 
     let mut state = store
         .0
@@ -645,7 +611,7 @@ fn run_flow(
             values,
         }) => run_state(FlowRunStatus::Error, values, Some((node_id, error))),
     };
-    Ok(state.clone())
+    Ok(state.run.clone())
 }
 
 #[cfg(test)]
@@ -728,7 +694,7 @@ mod tests {
             flow_edge("python-output", "python", "output"),
         ];
 
-        let values = evaluate_flow(nodes, edges, None, None, |source, input| {
+        let values = evaluate_flow(nodes, edges, |source, input| {
             assert_eq!(source, "double");
             Ok(json!(input.as_i64().unwrap() * 2))
         })
@@ -762,12 +728,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(FlowStore::default())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![
-            run_python,
-            get_flow,
-            replace_flow,
-            run_flow
-        ])
+        .invoke_handler(tauri::generate_handler![get_flow, run_flow])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
