@@ -1,8 +1,37 @@
 import { memo } from "react";
 import Editor from "@monaco-editor/react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import type { PythonFlowNode } from "./flow";
+import type { PythonFlowNode, Terminal } from "./flow";
 import { NodeFrame } from "./NodeFrame";
+
+type TerminalDirection = Terminal["direction"];
+
+const handleProps = {
+  input: { type: "target", position: Position.Left },
+  output: { type: "source", position: Position.Right },
+} as const;
+
+const TerminalHandles = ({
+  terminals,
+  direction,
+}: {
+  terminals: Terminal[];
+  direction: TerminalDirection;
+}) => (
+    <div className={`node__terminals node__terminals--${direction}`}>
+      {terminals
+        .filter((terminal) => terminal.direction === direction)
+        .map((terminal) => (
+          <div
+            className={`node__terminal node__terminal--${direction}`}
+            key={terminal.id}
+          >
+            <Handle {...handleProps[direction]} id={terminal.id} />
+            <span className="node__terminal-name">{terminal.name}</span>
+          </div>
+        ))}
+    </div>
+);
 
 export const PythonNode = memo(
   ({
@@ -10,11 +39,7 @@ export const PythonNode = memo(
     selected,
   }: NodeProps<PythonFlowNode>) => (
     <NodeFrame title="Python" selected={selected} minWidth={260} minHeight={180}>
-      <Handle
-        type="target"
-        id="input"
-        position={Position.Left}
-      />
+      <TerminalHandles terminals={data.terminals} direction="input" />
       <div className="nodrag nowheel node__editor">
         <Editor
           width="100%"
@@ -32,11 +57,7 @@ export const PythonNode = memo(
           }}
         />
       </div>
-      <Handle
-        type="source"
-        id="output"
-        position={Position.Right}
-      />
+      <TerminalHandles terminals={data.terminals} direction="output" />
     </NodeFrame>
   ),
 );

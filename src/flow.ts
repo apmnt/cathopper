@@ -4,8 +4,14 @@ export type InputNodeData = {
   value: string;
   onChange?: (value: string) => void;
 };
+export type Terminal = {
+  id: string;
+  name: string;
+  direction: "input" | "output";
+};
 export type PythonNodeData = {
   code: string;
+  terminals: Terminal[];
   onChange?: (code: string) => void;
 };
 export type OutputNodeData = { value?: unknown };

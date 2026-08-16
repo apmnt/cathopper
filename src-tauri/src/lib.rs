@@ -124,7 +124,13 @@ impl Default for FlowStore {
                     id: "python".into(),
                     kind: FlowNodeKind::PythonNode,
                     position: FlowPosition { x: 270.0, y: 70.0 },
-                    data: json!({ "code": "output = input * 2" }),
+                    data: json!({
+                        "code": "output = input * 2",
+                        "terminals": [
+                            { "id": "input", "name": "input", "direction": "input" },
+                            { "id": "output", "name": "output", "direction": "output" }
+                        ]
+                    }),
                     style: json!({ "width": 320, "height": 240 }),
                     width: None,
                     height: None,
@@ -142,7 +148,13 @@ impl Default for FlowStore {
                     id: "python-second".into(),
                     kind: FlowNodeKind::PythonNode,
                     position: FlowPosition { x: 660.0, y: 360.0 },
-                    data: json!({ "code": "output = input + 1" }),
+                    data: json!({
+                        "code": "output = input + 1",
+                        "terminals": [
+                            { "id": "input", "name": "input", "direction": "input" },
+                            { "id": "output", "name": "output", "direction": "output" }
+                        ]
+                    }),
                     style: json!({ "width": 320, "height": 240 }),
                     width: None,
                     height: None,

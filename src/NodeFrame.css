@@ -30,3 +30,36 @@
     background: white;
     z-index: 1;
 }
+
+.node__terminals {
+    position: absolute;
+    top: 32px;
+    bottom: 10px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-evenly;
+    z-index: 2;
+}
+
+.node__terminals--input {
+    left: 0;
+}
+
+.node__terminals--output {
+    right: 0;
+}
+
+.node__terminal {
+    display: flex;
+    align-items: center;
+}
+
+.node__terminal--output {
+    flex-direction: row-reverse;
+}
+
+.node__terminal .react-flow__handle {
+    position: relative;
+    inset: auto;
+    transform: none;
+}
