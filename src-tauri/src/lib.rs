@@ -138,6 +138,27 @@ impl Default for FlowStore {
                     width: None,
                     height: None,
                 },
+                FlowNode {
+                    id: "python-second".into(),
+                    kind: FlowNodeKind::PythonNode,
+                    position: FlowPosition { x: 660.0, y: 360.0 },
+                    data: json!({ "code": "output = input + 1" }),
+                    style: json!({ "width": 320, "height": 240 }),
+                    width: None,
+                    height: None,
+                },
+                FlowNode {
+                    id: "output-second".into(),
+                    kind: FlowNodeKind::OutputNode,
+                    position: FlowPosition {
+                        x: 1050.0,
+                        y: 410.0,
+                    },
+                    data: json!({}),
+                    style: json!({ "width": 200, "height": 140 }),
+                    width: None,
+                    height: None,
+                },
             ],
             edges: vec![
                 FlowEdge {
@@ -151,6 +172,20 @@ impl Default for FlowStore {
                     id: "python-output".into(),
                     source: "python".into(),
                     target: "output".into(),
+                    source_handle: Some("output".into()),
+                    target_handle: Some("input".into()),
+                },
+                FlowEdge {
+                    id: "python-python-second".into(),
+                    source: "python".into(),
+                    target: "python-second".into(),
+                    source_handle: Some("output".into()),
+                    target_handle: Some("input".into()),
+                },
+                FlowEdge {
+                    id: "python-second-output-second".into(),
+                    source: "python-second".into(),
+                    target: "output-second".into(),
                     source_handle: Some("output".into()),
                     target_handle: Some("input".into()),
                 },
@@ -701,6 +736,41 @@ mod tests {
         .expect("connected flow should run");
 
         assert_eq!(values["output"], json!(6));
+    }
+
+    #[test]
+    fn evaluates_branched_python_nodes() {
+        let nodes = vec![
+            flow_node("input", FlowNodeKind::InputNode, json!({ "value": "3" })),
+            flow_node(
+                "double",
+                FlowNodeKind::PythonNode,
+                json!({ "code": "double" }),
+            ),
+            flow_node("first-output", FlowNodeKind::OutputNode, json!({})),
+            flow_node(
+                "increment",
+                FlowNodeKind::PythonNode,
+                json!({ "code": "increment" }),
+            ),
+            flow_node("second-output", FlowNodeKind::OutputNode, json!({})),
+        ];
+        let edges = vec![
+            flow_edge("input-double", "input", "double"),
+            flow_edge("double-first-output", "double", "first-output"),
+            flow_edge("double-increment", "double", "increment"),
+            flow_edge("increment-second-output", "increment", "second-output"),
+        ];
+
+        let values = evaluate_flow(nodes, edges, |source, input| match source.as_str() {
+            "double" => Ok(json!(input.as_i64().unwrap() * 2)),
+            "increment" => Ok(json!(input.as_i64().unwrap() + 1)),
+            _ => Err(format!("unexpected source: {source}")),
+        })
+        .expect("branched flow should run");
+
+        assert_eq!(values["first-output"], json!(6));
+        assert_eq!(values["second-output"], json!(7));
     }
 
     #[test]
