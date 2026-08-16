@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     format, fs,
     io::Write,
     path::{Path, PathBuf},
@@ -410,10 +410,73 @@ fn python_source(node: &FlowNode) -> Result<String, String> {
         .ok_or_else(|| format!("Python node \"{}\" needs source code.", node.id))
 }
 
+#[derive(Debug)]
 struct FlowFailure {
     node_id: String,
     error: String,
     values: BTreeMap<String, Value>,
+}
+
+struct ExecutionStep {
+    node_id: String,
+    input_node_id: Option<String>,
+}
+
+struct ExecutionPlan {
+    nodes_by_id: BTreeMap<String, FlowNode>,
+    steps: Vec<ExecutionStep>,
+}
+
+struct GraphIndex {
+    incoming: BTreeMap<String, String>,
+    outgoing: BTreeMap<String, Vec<String>>,
+    indegree: BTreeMap<String, usize>,
+}
+
+impl GraphIndex {
+    fn new(node_ids: impl Iterator<Item = String>) -> Self {
+        Self {
+            incoming: BTreeMap::new(),
+            outgoing: BTreeMap::new(),
+            indegree: node_ids.map(|id| (id, 0)).collect(),
+        }
+    }
+}
+
+fn index_edge(
+    mut index: GraphIndex,
+    edge: FlowEdge,
+    nodes: &BTreeMap<String, FlowNode>,
+) -> Result<GraphIndex, FlowFailure> {
+    if !nodes.contains_key(&edge.source) || !nodes.contains_key(&edge.target) {
+        return Err(FlowFailure {
+            node_id: edge.target,
+            error: format!("Edge \"{}\" references a missing node.", edge.id),
+            values: BTreeMap::new(),
+        });
+    }
+    if index
+        .incoming
+        .insert(edge.target.clone(), edge.source.clone())
+        .is_some()
+    {
+        return Err(FlowFailure {
+            node_id: edge.target,
+            error: "Multiple inputs are not supported yet.".into(),
+            values: BTreeMap::new(),
+        });
+    }
+
+    *index
+        .indegree
+        .get_mut(&edge.target)
+        .expect("target was validated") += 1;
+    index
+        .outgoing
+        .entry(edge.source)
+        .or_default()
+        .push(edge.target);
+    Ok(index)
 }
 
 fn evaluate_node<F>(
@@ -446,8 +509,72 @@ where
     }
 }
 
+fn execution_plan(
+    nodes: Vec<FlowNode>,
+    edges: Vec<FlowEdge>,
+) -> Result<ExecutionPlan, FlowFailure> {
+    let nodes_by_id = nodes
+        .into_iter()
+        .map(|node| (node.id.clone(), node))
+        .collect::<BTreeMap<_, _>>();
+    let GraphIndex {
+        incoming,
+        outgoing,
+        mut indegree,
+    } = edges.into_iter().try_fold(
+        GraphIndex::new(nodes_by_id.keys().cloned()),
+        |index, edge| index_edge(index, edge, &nodes_by_id),
+    )?;
+
+    let mut ready = indegree
+        .iter()
+        .filter(|(_, degree)| **degree == 0)
+        .map(|(id, _)| id.clone())
+        .collect::<VecDeque<_>>();
+    let ordered_ids = std::iter::from_fn(|| {
+        ready.pop_front().map(|node_id| {
+            outgoing
+                .get(&node_id)
+                .into_iter()
+                .flatten()
+                .for_each(|target| {
+                    let degree = indegree.get_mut(target).expect("target was validated");
+                    *degree -= 1;
+                    if *degree == 0 {
+                        ready.push_back(target.clone());
+                    }
+                });
+            node_id
+        })
+    })
+    .collect::<Vec<_>>();
+
+    if ordered_ids.len() != indegree.len() {
+        return Err(FlowFailure {
+            node_id: indegree
+                .iter()
+                .find(|(_, degree)| **degree > 0)
+                .map(|(id, _)| id.clone())
+                .unwrap_or_default(),
+            error: "Flow contains a cycle.".into(),
+            values: BTreeMap::new(),
+        });
+    }
+
+    let steps = ordered_ids
+        .into_iter()
+        .map(|node_id| ExecutionStep {
+            input_node_id: incoming.get(&node_id).cloned(),
+            node_id,
+        })
+        .collect();
+
+    Ok(ExecutionPlan { nodes_by_id, steps })
+}
+
 fn evaluate_flow<F>(
     nodes: Vec<FlowNode>,
+    edges: Vec<FlowEdge>,
     input_override: Option<&Value>,
     code_override: Option<&str>,
     mut execute_python: F,
@@ -455,34 +582,32 @@ fn evaluate_flow<F>(
 where
     F: FnMut(String, Value) -> Result<Value, String>,
 {
-    nodes
-        .into_iter()
-        .try_fold(
-            (None, BTreeMap::new()),
-            |(previous_value, mut values), node| {
-                let node_id = node.id.clone();
-                let value = match evaluate_node(
-                    &node,
-                    previous_value,
-                    input_override,
-                    code_override,
-                    &mut execute_python,
-                ) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        return Err(FlowFailure {
-                            node_id,
-                            error,
-                            values,
-                        });
-                    }
-                };
+    let ExecutionPlan { nodes_by_id, steps } = execution_plan(nodes, edges)?;
 
-                values.insert(node.id, value.clone());
-                Ok((Some(value), values))
-            },
-        )
-        .map(|(_, values)| values)
+    steps
+        .into_iter()
+        .try_fold(BTreeMap::new(), |mut values, step| {
+            let previous_value = step
+                .input_node_id
+                .as_ref()
+                .and_then(|source_id| values.get(source_id))
+                .cloned();
+            let value = evaluate_node(
+                nodes_by_id.get(&step.node_id).expect("planned node exists"),
+                previous_value,
+                input_override,
+                code_override,
+                &mut execute_python,
+            )
+            .map_err(|error| FlowFailure {
+                node_id: step.node_id.clone(),
+                error,
+                values: values.clone(),
+            })?;
+
+            values.insert(step.node_id, value);
+            Ok(values)
+        })
 }
 
 #[tauri::command]
@@ -491,18 +616,22 @@ fn run_flow(
     input: Option<Value>,
     code: Option<String>,
 ) -> Result<FlowState, String> {
-    let nodes = {
+    let (nodes, edges) = {
         let mut state = store
             .0
             .lock()
             .map_err(|_| "Flow state is unavailable".to_string())?;
         state.run = run_state(FlowRunStatus::Running, BTreeMap::new(), None);
-        state.nodes.clone()
+        (state.nodes.clone(), state.edges.clone())
     };
 
-    let run = evaluate_flow(nodes, input.as_ref(), code.as_deref(), |source, input| {
-        run_python(None, source, input).map(|result| result.output)
-    });
+    let run = evaluate_flow(
+        nodes,
+        edges,
+        input.as_ref(),
+        code.as_deref(),
+        |source, input| run_python(None, source, input).map(|result| result.output),
+    );
 
     let mut state = store
         .0
@@ -522,6 +651,28 @@ fn run_flow(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn flow_node(id: &str, kind: FlowNodeKind, data: Value) -> FlowNode {
+        FlowNode {
+            id: id.into(),
+            kind,
+            position: FlowPosition { x: 0.0, y: 0.0 },
+            data,
+            style: json!({}),
+            width: None,
+            height: None,
+        }
+    }
+
+    fn flow_edge(id: &str, source: &str, target: &str) -> FlowEdge {
+        FlowEdge {
+            id: id.into(),
+            source: source.into(),
+            target: target.into(),
+            source_handle: Some("output".into()),
+            target_handle: Some("input".into()),
+        }
+    }
 
     #[test]
     fn parses_a_successful_direct_variable_response() {
@@ -559,6 +710,50 @@ mod tests {
         };
 
         assert_eq!(input_value(&node), Ok(json!({ "count": 2 })));
+    }
+
+    #[test]
+    fn evaluates_nodes_in_edge_order() {
+        let nodes = vec![
+            flow_node("output", FlowNodeKind::OutputNode, json!({})),
+            flow_node(
+                "python",
+                FlowNodeKind::PythonNode,
+                json!({ "code": "double" }),
+            ),
+            flow_node("input", FlowNodeKind::InputNode, json!({ "value": "3" })),
+        ];
+        let edges = vec![
+            flow_edge("input-python", "input", "python"),
+            flow_edge("python-output", "python", "output"),
+        ];
+
+        let values = evaluate_flow(nodes, edges, None, None, |source, input| {
+            assert_eq!(source, "double");
+            Ok(json!(input.as_i64().unwrap() * 2))
+        })
+        .expect("connected flow should run");
+
+        assert_eq!(values["output"], json!(6));
+    }
+
+    #[test]
+    fn rejects_cycles_before_execution() {
+        let nodes = vec![
+            flow_node("first", FlowNodeKind::OutputNode, json!({})),
+            flow_node("second", FlowNodeKind::OutputNode, json!({})),
+        ];
+        let edges = vec![
+            flow_edge("first-second", "first", "second"),
+            flow_edge("second-first", "second", "first"),
+        ];
+
+        let failure = match execution_plan(nodes, edges) {
+            Ok(_) => panic!("cycle should be rejected"),
+            Err(failure) => failure,
+        };
+
+        assert_eq!(failure.error, "Flow contains a cycle.");
     }
 }
 
